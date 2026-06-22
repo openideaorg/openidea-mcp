@@ -22,8 +22,8 @@ class OpenIdeaClient:
         api_key: str | None = None,
         timeout: float = 10.0,
     ) -> None:
-        url = base_url or os.environ.get("OPENIDEA_API_URL")
-        key = api_key or os.environ.get("OPENIDEA_API_KEY")
+        url = (base_url or os.environ.get("OPENIDEA_API_URL", "")).strip()
+        key = (api_key or os.environ.get("OPENIDEA_API_KEY", "")).strip()
         if not url:
             raise RuntimeError("OPENIDEA_API_URL is required (env var or constructor arg).")
         if not key:

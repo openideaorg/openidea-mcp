@@ -8,7 +8,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ResourceType(str, Enum):
@@ -71,6 +71,17 @@ class SearchResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     results: list[Resource] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coalesce_items(cls, data: Any) -> Any:
+        """The live API returns hits under `items` (and an empty `results`).
+        Fold `items` into `results` and drop it, so callers always read a
+        populated `results` and nothing leaks back out under `items`."""
+        if isinstance(data, dict) and data.get("items") is not None:
+            data = {**data, "results": data["items"]}
+            data.pop("items", None)
+        return data
     total: int = 0
     page: int | None = None
     limit: int | None = None

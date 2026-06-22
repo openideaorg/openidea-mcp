@@ -46,6 +46,25 @@ async def test_search_returns_resources():
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_search_maps_items_to_results():
+    # The live API returns hits under `items` alongside an empty `results`.
+    respx.get(f"{BASE}/api/v1/search").mock(
+        return_value=httpx.Response(200, json={
+            "results": [],
+            "total": 2,
+            "items": [_fake_resource("openalex:W1"), _fake_resource("openalex:W2")],
+        })
+    )
+    async with OpenIdeaClient(base_url=BASE, api_key=KEY) as client:
+        resp = await client.search("transformers", type=ResourceType.paper)
+    assert [r.id for r in resp.results] == ["openalex:W1", "openalex:W2"]
+    dumped = resp.model_dump(mode="json", exclude_none=True)
+    assert len(dumped["results"]) == 2
+    assert "items" not in dumped  # folded in, not leaked back out
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_get_resource_returns_resource():
     rid = "openalex:W42"
     respx.get(f"{BASE}/api/v1/resources/{rid}").mock(
