@@ -23,6 +23,104 @@ side. This repo is fully standalone — no dependency on the Open Idea codebase.
 | [docs/troubleshooting.md](docs/troubleshooting.md) | 401s, newline keys, startup failures, and more. |
 | [docs/development.md](docs/development.md) | Repo layout, env setup, tests, workflow. |
 
+## 🚀 Getting Started
+
+This tool connects Claude directly to Open Idea's academic and data search
+engines. It runs entirely on your local machine using your personal API key.
+Follow these 4 simple steps to get set up.
+
+### Prerequisites
+
+Make sure you have Python 3.10 or higher installed on your computer. You can
+check this by running `python --version` in your terminal.
+
+---
+
+### Step 1: Get Your Free Open Idea API Key
+
+Because this tool queries live databases on your behalf, you need a personal
+access key.
+
+1. Go to [openidea.world](https://www.openidea.world) and sign up or log in.
+2. Navigate to the Developer Dashboard at
+   [openidea.world/developer/api-keys](https://www.openidea.world/developer/api-keys).
+3. Click **Create New Key**.
+4. ⚠️ **Copy the key immediately** (it starts with `oi_live_...`). It will only
+   be shown to you once.
+
+---
+
+### Step 2: Install the Search Tool
+
+Open your terminal (Terminal on Mac/Linux, or PowerShell/Command Prompt on
+Windows) and run the following command to safely install the tool:
+
+```bash
+pipx install mcp-openidea-search
+```
+
+*(If you do not have `pipx` configured, you can use
+`pip install mcp-openidea-search` instead).*
+
+---
+
+### Step 3: Connect It to Your Claude Client
+
+Choose the instructions below depending on whether you use **Claude Code** (in
+your terminal) or the **Claude Desktop App**.
+
+#### Option A: For Claude Code (Terminal)
+
+1. Close any active Claude sessions by typing `exit`.
+2. Run this exact command in your terminal (make sure to replace `YOUR_KEY_HERE`
+   with the actual key you copied in Step 1):
+
+```bash
+claude mcp add openidea \
+  -e OPENIDEA_API_URL=https://www.openidea.world \
+  -e OPENIDEA_API_KEY=YOUR_KEY_HERE \
+  -- mcp-openidea-search stdio
+```
+
+#### Option B: For Claude Desktop (App)
+
+1. Open your Claude Desktop configuration file. Paste the path below into your
+   file explorer or terminal to open it:
+   * **Mac:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+   * **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+2. Open the file in a text editor (like Notepad or VS Code) and add the
+   following configuration block inside the `"mcpServers"` section (replace
+   `YOUR_KEY_HERE` with your actual key):
+
+```json
+{
+  "mcpServers": {
+    "openidea": {
+      "command": "mcp-openidea-search",
+      "args": ["stdio"],
+      "env": {
+        "OPENIDEA_API_URL": "https://www.openidea.world",
+        "OPENIDEA_API_KEY": "YOUR_KEY_HERE"
+      }
+    }
+  }
+}
+```
+
+3. Completely **restart** your Claude Desktop application.
+
+---
+
+### Step 4: Try It Out!
+
+You are all set! You do not need to run this tool manually; Claude will wake it
+up when needed. Open a chat with Claude and ask a natural question:
+
+💬 *"Use the openidea MCP to find recent papers on transformer architectures."*
+
+Claude will automatically look up the records, pull data from arXiv, GitHub, or
+HuggingFace, and summarize the answers for you!
+
 ## Install
 
 Requires Python 3.10+.
