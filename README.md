@@ -43,7 +43,7 @@ access key.
 
 1. Go to [openidea.world](https://www.openidea.world) and sign up or log in.
 2. Navigate to the Developer Dashboard at
-   [openidea.world/developer/api-keys](https://www.openidea.world/developer/api-keys).
+   [openidea.world/developer/api-keys](https://openidea.world/developer/api-keys).
 3. Click **Create New Key**.
 4. ⚠️ **Copy the key immediately** (it starts with `oi_live_...`). It will only
    be shown to you once.
@@ -140,7 +140,7 @@ The server reads two environment variables:
 | Variable | Required | Description |
 |---|---|---|
 | `OPENIDEA_API_URL` | yes | Base URL of the Open Idea API (`https://www.openidea.world` in production). A trailing slash is stripped automatically. |
-| `OPENIDEA_API_KEY` | yes | Personal Bearer key. Mint one at `https://www.openidea.world/developer/api-keys` while signed in. The plaintext is shown only once at creation. |
+| `OPENIDEA_API_KEY` | yes | Personal Bearer key. Mint one at `https://openidea.world/developer/api-keys` while signed in. The plaintext is shown only once at creation. |
 
 Both values are whitespace/newline-trimmed before use.
 

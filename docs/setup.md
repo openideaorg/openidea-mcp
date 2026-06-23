@@ -96,7 +96,7 @@ if either is missing.
 | Variable | Required | Description |
 |---|---|---|
 | `OPENIDEA_API_URL` | yes | Base URL of the Open Idea API. Production value: `https://www.openidea.world`. A trailing slash is stripped automatically. |
-| `OPENIDEA_API_KEY` | yes | Personal Bearer key. Mint one at `https://www.openidea.world/developer/api-keys` while signed in. The plaintext is shown only once at creation. |
+| `OPENIDEA_API_KEY` | yes | Personal Bearer key. Mint one at `https://openidea.world/developer/api-keys` while signed in. The plaintext is shown only once at creation. |
 
 Both values are read in [client.py](../src/mcp_openidea_search/client.py) and are
 `.strip()`-ed, so surrounding whitespace and trailing newlines (a common

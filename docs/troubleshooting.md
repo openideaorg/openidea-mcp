@@ -47,7 +47,7 @@ Open Idea returns HTTP `401`.
    `env` block (not just your shell). The process exits with code 2 before any
    request if it is empty.
 2. **Key revoked or expired** — mint a fresh key at
-   `https://www.openidea.world/developer/api-keys`. The plaintext is shown only
+   `https://openidea.world/developer/api-keys`. The plaintext is shown only
    once at creation.
 3. **Wrong key prefix/format** — production keys look like `oi_live_…`. Make
    sure you did not paste a placeholder.
