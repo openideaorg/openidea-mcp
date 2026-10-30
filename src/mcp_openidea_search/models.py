@@ -21,13 +21,20 @@ class ResourceType(str, Enum):
 
 
 class ResourceProvider(str, Enum):
+    """Providers known when this package was released.
+
+    Documentation only: `Resource.source` is a plain string because Open Idea
+    adds providers server-side, and a strict enum would reject every result
+    from a provider this package has not heard of yet. `GET /api/v1/sources`
+    (see `OpenIdeaClient.list_sources`) is the live list.
+    """
+
     openalex = "openalex"
     arxiv = "arxiv"
     zenodo = "zenodo"
     swh = "swh"
     ckan = "ckan"
     huggingface = "huggingface"
-    paperswithcode = "paperswithcode"
     youtube = "youtube"
     github = "github"
     gitlab = "gitlab"
@@ -44,7 +51,8 @@ class Resource(BaseModel):
     id: str
     type: ResourceType
     title: str
-    source: ResourceProvider
+    # Any provider name; see ResourceProvider for why this is not the enum.
+    source: str
     url: str
     authors: list[str] | None = None
     year: int | None = None
@@ -53,6 +61,9 @@ class Resource(BaseModel):
     tags: list[str] | None = None
     meta: dict[str, Any] | None = None
     score: float | None = None
+    # Normalized 0..1 relevance. Newer servers send it; older ones only send
+    # `score`, whose scale varies by provider (the tools derive a fallback).
+    relevance: float | None = None
 
 
 class SearchCoverage(BaseModel):
@@ -88,3 +99,38 @@ class SearchResponse(BaseModel):
     hasMore: bool | None = None
     nextCursor: str | None = None
     coverage: SearchCoverage | None = None
+    ranking: Any | None = None
+
+
+class Source(BaseModel):
+    """One entry of GET /api/v1/sources."""
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str
+    label: str | None = None
+    pillar: str | None = None
+    types: list[str] = Field(default_factory=list)
+    tier: str | None = None
+    unlocked: bool | None = None
+    configured: bool | None = None
+
+
+class SourcePack(BaseModel):
+    """A named bundle of sources, e.g. "life sciences"."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str
+    label: str | None = None
+    description: str | None = None
+    sources: list[str] = Field(default_factory=list)
+
+
+class SourcesResponse(BaseModel):
+    """Shape returned by GET /api/v1/sources (newer servers only)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    sources: list[Source] = Field(default_factory=list)
+    packs: list[SourcePack] = Field(default_factory=list)

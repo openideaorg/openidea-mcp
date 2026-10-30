@@ -112,3 +112,129 @@ async def test_429_retries_once(monkeypatch):
         resp = await client.search("x")
     assert route.call_count == 2
     assert resp.total == 0
+
+
+@pytest.fixture
+def no_sleep(monkeypatch):
+    slept: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr("mcp_openidea_search.client.asyncio.sleep", fake_sleep)
+    return slept
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_429_honors_retry_after_capped(no_sleep):
+    route = respx.get(f"{BASE}/api/v1/search").mock(
+        side_effect=[
+            httpx.Response(429, headers={"Retry-After": "60"}),
+            httpx.Response(200, json={"results": [_fake_resource()], "total": 1}),
+        ]
+    )
+    async with OpenIdeaClient(base_url=BASE, api_key=KEY) as client:
+        resp = await client.search("x")
+    assert route.call_count == 2
+    assert no_sleep == [5.0]
+    assert resp.total == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_429_twice_raises(no_sleep):
+    respx.get(f"{BASE}/api/v1/search").mock(return_value=httpx.Response(429))
+    async with OpenIdeaClient(base_url=BASE, api_key=KEY) as client:
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.search("x")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_5xx_retries_once(no_sleep):
+    route = respx.get(f"{BASE}/api/v1/search").mock(
+        side_effect=[httpx.Response(502), httpx.Response(200, json={"results": [], "total": 0})]
+    )
+    async with OpenIdeaClient(base_url=BASE, api_key=KEY) as client:
+        await client.search("x")
+    assert route.call_count == 2
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_connect_error_retries_once(no_sleep):
+    route = respx.get(f"{BASE}/api/v1/search").mock(
+        side_effect=[httpx.ConnectError("boom"), httpx.Response(200, json={"results": []})]
+    )
+    async with OpenIdeaClient(base_url=BASE, api_key=KEY) as client:
+        await client.search("x")
+    assert route.call_count == 2
+
+
+def test_timeout_default_and_env(monkeypatch):
+    monkeypatch.delenv("OPENIDEA_TIMEOUT", raising=False)
+    assert OpenIdeaClient(base_url=BASE, api_key=KEY).timeout == 30.0
+    monkeypatch.setenv("OPENIDEA_TIMEOUT", "45")
+    assert OpenIdeaClient(base_url=BASE, api_key=KEY).timeout == 45.0
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_search_sends_min_relevance_and_sources():
+    route = respx.get(f"{BASE}/api/v1/search").mock(
+        return_value=httpx.Response(200, json={"results": []})
+    )
+    async with OpenIdeaClient(base_url=BASE, api_key=KEY) as client:
+        await client.search("x", min_relevance=0.5, sources=["arxiv", " github "])
+    params = route.calls.last.request.url.params
+    assert params["minRelevance"] == "0.5"
+    assert params["sources"] == "arxiv,github"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_search_omits_new_params_by_default():
+    route = respx.get(f"{BASE}/api/v1/search").mock(
+        return_value=httpx.Response(200, json={"results": []})
+    )
+    async with OpenIdeaClient(base_url=BASE, api_key=KEY) as client:
+        await client.search("x")
+    params = route.calls.last.request.url.params
+    assert "minRelevance" not in params and "sources" not in params
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_sources_parses():
+    respx.get(f"{BASE}/api/v1/sources").mock(return_value=httpx.Response(200, json={
+        "sources": [{"name": "arxiv", "label": "arXiv", "pillar": "research", "types": ["paper"],
+                     "tier": "free", "unlocked": True, "configured": True}],
+        "packs": [{"id": "ml", "label": "ML", "description": "ML stack", "sources": ["arxiv"]}],
+    }))
+    async with OpenIdeaClient(base_url=BASE, api_key=KEY) as client:
+        listing = await client.list_sources()
+    assert listing is not None
+    assert listing.sources[0].name == "arxiv"
+    assert listing.packs[0].sources == ["arxiv"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_sources_404_returns_none():
+    respx.get(f"{BASE}/api/v1/sources").mock(return_value=httpx.Response(404))
+    async with OpenIdeaClient(base_url=BASE, api_key=KEY) as client:
+        assert await client.list_sources() is None
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_unknown_provider_and_relevance_parse():
+    body = {**_fake_resource(), "source": "some_new_provider", "relevance": 0.42}
+    respx.get(f"{BASE}/api/v1/search").mock(
+        return_value=httpx.Response(200, json={"items": [body], "total": 1})
+    )
+    async with OpenIdeaClient(base_url=BASE, api_key=KEY) as client:
+        resp = await client.search("x")
+    assert resp.results[0].source == "some_new_provider"
+    assert resp.results[0].relevance == 0.42
