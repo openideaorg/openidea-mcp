@@ -32,167 +32,189 @@ The MCP server name advertised to clients is **`openidea-search`**.
 
 ## Tools
 
-Seven tools are registered. Six are **presets** mapping to a single
-`ResourceType`; the seventh, `search_all`, searches across providers.
+Eight tools are registered. Six are **presets** mapping to a single
+`ResourceType`; `search_all` searches across types; `list_sources` lists the
+providers the server can search.
 
-| Tool | Resource type | Backing providers (server-side) |
+| Tool | Resource type | Example providers (server-side) |
 |---|---|---|
-| `search_papers` | `paper` | OpenAlex, arXiv, PapersWithCode |
+| `search_papers` | `paper` | OpenAlex, arXiv |
 | `search_code` | `code` | GitHub, GitLab, Software Heritage |
 | `search_datasets` | `dataset` | Zenodo, CKAN, Figshare, Kaggle |
 | `search_models` | `model` | HuggingFace |
 | `search_hardware` | `hardware` | open-hardware providers |
 | `search_videos` | `video` | YouTube |
 | `search_all` | (all) | every provider |
+| `list_sources` | — | — |
 
-> Provider attribution above reflects the categories Open Idea federates for
-> each type. The exact provider set for a given query is reported in the
-> response `coverage` object. The authoritative `ResourceProvider` enum is:
-> `openalex`, `arxiv`, `zenodo`, `swh`, `ckan`, `huggingface`, `paperswithcode`,
-> `youtube`, `github`, `gitlab`, `figshare`, `kaggle`, `custom`.
+> Open Idea adds providers server-side, so the provider list is not fixed in
+> this package. `list_sources` returns the live list on servers that support
+> `GET /api/v1/sources`; the response `source` field of any result is the
+> provider name.
 
-### Common input schema (preset tools)
+### Common input schema (search tools)
 
-All six preset tools share `_BASE_SCHEMA`:
+| Input | Type | Default | Notes |
+|---|---|---|---|
+| `query` | string | — | **Required.** |
+| `max_results` | integer 1–500 | `50` | Most results to return. Auto mode may return fewer. |
+| `min_relevance` | number 0–1 | `0.35` | Drop results below this relevance; stop paging when a whole page is below it. `0` disables. |
+| `mode` | `"auto"` \| `"page"` | `"auto"` | See below. |
+| `sources` | string[] | — | Only these providers, e.g. `["arxiv", "openalex"]`. |
+| `page` | integer ≥1 | — | Page number (page mode). |
+| `cursor` | string | — | `next_cursor` from an earlier response. |
+| `detail` | `"compact"` \| `"full"` | `"compact"` | Output size, see below. |
+| `limit` | integer | — | Deprecated alias for `max_results` (used only when `max_results` is absent). |
+
+`search_all` also takes `types: string[]` (values `paper`, `dataset`, `code`,
+`model`, `hardware`, `video`; unknown values are ignored).
+
+### Modes
+
+**`auto` (default).** The tool requests pages of `min(remaining, 100)` results
+and follows `nextCursor` until one of:
+
+| `stopped_because` | Meaning |
+|---|---|
+| `max_results` | `max_results` results collected. |
+| `no_more_pages` | The server has no further page (no `nextCursor`, `hasMore` false), or a page repeated only results already seen. |
+| `below_threshold` | Every result on the latest page was below `min_relevance` (or a newer server filtered the whole page out). |
+| `page_cap` | Safety stop after 25 pages. |
+
+The server's plan limit may return fewer results per page than requested
+(free 30, student 50, plus 100, enterprise 200); auto mode keeps paging, so
+`max_results` still applies. When the server sends no `nextCursor` but
+`hasMore: true` (older servers), the next request steps `page` instead.
+
+**`page`.** One request with the given `page` / `cursor` and
+`limit = min(max_results, 100)`. `stopped_because` is `single_page`; pass
+`next_cursor` back to continue.
+
+### Relevance
+
+Each result gets a `relevance` in 0..1:
+
+- the server's `relevance` field when present (newer servers);
+- otherwise `score / top score of the first page` (older servers, whose scores
+  are on provider-specific scales), clamped to 1;
+- otherwise unknown (`relevance` omitted). Results with unknown relevance are
+  kept.
+
+When `min_relevance > 0` it is also sent as `minRelevance`; older servers ignore
+it and the filter above applies on this side. In page mode the fallback is
+relative to the fetched page's best score.
+
+### Sources
+
+`sources` is sent as `sources=a,b,c`. Results whose `source` is not in the list
+are also dropped on this side (case-insensitive), so the restriction holds on
+older servers that ignore the parameter.
+
+### Output
+
+Single `TextContent` block whose `text` is JSON.
 
 ```json
 {
-  "type": "object",
-  "properties": {
-    "query": { "type": "string", "description": "Search query." },
-    "limit": { "type": "integer", "default": 20, "minimum": 1, "maximum": 100 }
-  },
-  "required": ["query"]
-}
-```
-
-- `query` **(required)** — free-text search string.
-- `limit` *(optional)* — max results, default `20`, clamped by the schema to
-  `1..100`.
-
-### `search_papers` / `search_code` / `search_datasets` / `search_models` / `search_hardware` / `search_videos`
-
-**Purpose.** Search Open Idea for resources of one specific type. Each forwards
-`type=<resource type>` to `GET /api/v1/search`.
-
-**Input schema.** `_BASE_SCHEMA` (above).
-
-**Example request** (`search_papers`):
-
-```json
-{
-  "name": "search_papers",
-  "arguments": { "query": "transformer architectures", "limit": 5 }
-}
-```
-
-**Example response** (single `TextContent` block; `text` is JSON):
-
-```json
-{
+  "query": "transformer architectures",
+  "total_returned": 2,
+  "stopped_because": "below_threshold",
   "results": [
     {
       "id": "openalex:W2741809807",
       "type": "paper",
       "title": "Attention Is All You Need",
-      "source": "openalex",
       "url": "https://openalex.org/W2741809807",
-      "authors": ["Ashish Vaswani", "Noam Shazeer"],
       "year": 2017,
-      "score": 0.98
+      "source": "openalex",
+      "relevance": 0.98,
+      "description": "The dominant sequence transduction models are based on…",
+      "authors": ["Ashish Vaswani", "Noam Shazeer", "Niki Parmar"]
     }
   ],
-  "total": 1,
-  "page": 1,
-  "limit": 5,
-  "hasMore": true,
-  "coverage": {
-    "requestedProviders": ["openalex", "arxiv"],
-    "receivedCounts": { "openalex": 1, "arxiv": 0 },
-    "uniqueBefore": 1,
-    "uniqueAfter": 1,
-    "merged": 0
-  }
+  "next_cursor": "eyJvIjoxMDB9",
+  "total_available": 1840
 }
 ```
 
-The payload is `SearchResponse.model_dump(mode="json", exclude_none=True)` — so
-`null` fields are omitted entirely.
+- **compact** (default): `id`, `type`, `title`, `url`, `year`, `source`,
+  `relevance` (2 decimals), `description` (≤200 characters, whitespace
+  collapsed), `authors` (first 3). Missing fields are omitted.
+- **full**: every field the server returned for the result, plus the computed
+  `relevance`.
+- `total_available` is the server's `total` from the first page, when sent.
+- `next_cursor` continues after the last fetched page. If auto mode stopped on
+  `max_results` partway through a page, the rest of that page is skipped when
+  continuing from this cursor.
 
-**Error cases.**
+### `search_papers` / `search_code` / `search_datasets` / `search_models` / `search_hardware` / `search_videos`
 
-| Condition | Result |
-|---|---|
-| `query` missing/empty | `ValueError("`query` is required.")` |
-| API returns 401 | `OpenIdeaAuthError` |
-| API returns 429 | One automatic retry; then propagates if still failing |
-| API returns other 4xx/5xx | `httpx.HTTPStatusError` (via `raise_for_status()`) |
-
-### `search_all`
-
-**Purpose.** Search across all providers, optionally restricted to a subset of
-resource types.
-
-**Input schema** (`_ALL_SCHEMA` = `_BASE_SCHEMA` + `types`):
+Each forwards `type=<resource type>` to `GET /api/v1/search` with the inputs
+above.
 
 ```json
 {
-  "type": "object",
-  "properties": {
-    "query": { "type": "string", "description": "Search query." },
-    "limit": { "type": "integer", "default": 20, "minimum": 1, "maximum": 100 },
-    "types": {
-      "type": "array",
-      "items": {
-        "type": "string",
-        "enum": ["paper", "dataset", "code", "model", "hardware", "video"]
-      },
-      "description": "Optional filter — return only these resource types."
-    }
-  },
-  "required": ["query"]
+  "name": "search_papers",
+  "arguments": { "query": "protein folding", "max_results": 200, "sources": ["arxiv"] }
 }
 ```
 
-**Behavior.**
+### `search_all`
 
-- **Without `types`** → a single `GET /api/v1/search?q=…&limit=…` call; returns
-  the full `SearchResponse` (including `coverage`).
-- **With `types`** → the server issues **one request per type**, merges all
-  results, **de-duplicates by `id`**, and returns
-  `{"results": [...], "total": <count>}`. Type strings that are not valid
-  `ResourceType` values are silently ignored. Note: this branch does **not**
-  include a `coverage` object.
+- **Without `types`, or with one type** → the same behavior as a preset (one
+  type filter, or none).
+- **With several `types`** → one auto/page collection **per type, run
+  concurrently**. Results are merged, **de-duplicated by `id`** (the higher
+  relevance copy wins), sorted by relevance descending (unknown last), and
+  trimmed to `max_results`. The payload adds `by_type`, e.g.
+  `{"paper": {"returned": 40, "stopped_because": "below_threshold", "next_cursor": "…"}}`;
+  top-level `next_cursor` is `null` and `stopped_because` is `max_results`
+  (trimmed) or `per_type`. A type whose request failed shows
+  `{"error": "…"}` in `by_type` while the others still return; if every type
+  fails, or the key is rejected (401), the call fails. `cursor` cannot be
+  combined with several types.
 
-**Example request (no filter):**
-
-```json
-{ "name": "search_all", "arguments": { "query": "protein folding", "limit": 10 } }
-```
-
-**Example request (filtered):**
+> Fallback relevance (older servers) is normalized per type, so cross-type
+> ordering is approximate there.
 
 ```json
 {
   "name": "search_all",
-  "arguments": { "query": "protein folding", "limit": 10, "types": ["paper", "dataset"] }
+  "arguments": { "query": "protein folding", "types": ["paper", "dataset"], "max_results": 100 }
 }
 ```
 
-**Example response (filtered):**
+### `list_sources`
+
+No inputs. On servers with `GET /api/v1/sources`:
 
 ```json
 {
-  "results": [
-    { "id": "openalex:W123", "type": "paper", "title": "…", "source": "openalex", "url": "https://…" },
-    { "id": "zenodo:456", "type": "dataset", "title": "…", "source": "zenodo", "url": "https://…" }
+  "supported": true,
+  "sources": [
+    { "name": "arxiv", "label": "arXiv", "pillar": "research", "types": ["paper"],
+      "tier": "free", "unlocked": true, "configured": true }
   ],
-  "total": 2
+  "packs": [
+    { "id": "ml", "label": "Machine learning", "description": "…", "sources": ["arxiv", "huggingface", "github"] }
+  ]
 }
 ```
 
-**Error cases.** Same as the preset tools. Each per-type sub-request can
-independently raise `OpenIdeaAuthError` (401) or `httpx.HTTPStatusError`.
+On older servers (404) the tool succeeds with
+`{"supported": false, "message": "This Open Idea server does not provide /api/v1/sources yet, …"}`.
+
+### Error cases
+
+| Condition | Result |
+|---|---|
+| `query` missing/empty | `ValueError("`query` is required.")` |
+| `mode` / `detail` not an allowed value | `ValueError` |
+| `cursor` with several `types` | `ValueError` |
+| API returns 401 | `OpenIdeaAuthError` |
+| API returns 429 | One retry after `Retry-After` (capped at 5s); then `httpx.HTTPStatusError` |
+| API returns 5xx, or the connection fails | One retry after 0.5s; then the error propagates |
+| Other 4xx | `httpx.HTTPStatusError` |
 
 ---
 
@@ -252,37 +274,41 @@ Response (`text`):
 
 ## Underlying HTTP API
 
-The server calls exactly two Open Idea endpoints.
+The server calls three Open Idea endpoints.
 
 ### `GET /api/v1/search`
 
 | Query param | Source | Notes |
 |---|---|---|
 | `q` | `query` | Required. |
-| `limit` | `limit` | Sent as a string. |
+| `limit` | page size | `min(remaining, 100)` in auto mode; the plan limit may cap it lower. |
 | `type` | resource type | Sent only when a type is set. |
-| `page` | `page` | Sent only when provided (client supports it; tools don't surface it). |
-| `cursor` | `cursor` | Sent only when provided (client supports it; tools don't surface it). |
+| `page` | `page` | Page mode, or auto mode on servers without cursors. |
+| `cursor` | `cursor` / `nextCursor` | Sent only when known. |
+| `minRelevance` | `min_relevance` | Sent only when > 0. Older servers ignore it. |
+| `sources` | `sources` | Comma-separated. Sent only when given. Older servers ignore it. |
 
 Returns a `SearchResponse` JSON body.
-
-> Note: the `OpenIdeaClient.search` method accepts `page` and `cursor` for
-> pagination, but the MCP tool layer does not currently expose them — tools pass
-> only `query`, `type`, and `limit`.
 
 ### `GET /api/v1/resources/{id}`
 
 Returns a single `Resource`, or `404` if not found.
 
+### `GET /api/v1/sources`
+
+Returns a `SourcesResponse`. Older servers return `404`, which
+`OpenIdeaClient.list_sources()` maps to `None`.
+
 ### Request headers (all requests)
 
 ```
 Authorization: Bearer <OPENIDEA_API_KEY>
-User-Agent: mcp-openidea-search/0.1
+User-Agent: mcp-openidea-search/<version>
 Accept: application/json
 ```
 
-Default request timeout: **10.0 seconds**.
+Default request timeout: **30 seconds**, overridable with `OPENIDEA_TIMEOUT`
+(seconds).
 
 ---
 
@@ -295,10 +321,12 @@ with `extra="allow"`).
 
 `paper`, `dataset`, `code`, `model`, `hardware`, `video`.
 
-### `ResourceProvider` (enum)
+### `ResourceProvider` (enum, documentation only)
 
-`openalex`, `arxiv`, `zenodo`, `swh`, `ckan`, `huggingface`, `paperswithcode`,
-`youtube`, `github`, `gitlab`, `figshare`, `kaggle`, `custom`.
+Providers known at release: `openalex`, `arxiv`, `zenodo`, `swh`, `ckan`,
+`huggingface`, `youtube`, `github`, `gitlab`, `figshare`, `kaggle`, `custom`.
+`Resource.source` is a plain string, so results from providers added later
+still validate.
 
 ### `Resource`
 
@@ -307,7 +335,7 @@ with `extra="allow"`).
 | `id` | `str` | yes | Stable id, e.g. `openalex:W42`. |
 | `type` | `ResourceType` | yes | |
 | `title` | `str` | yes | |
-| `source` | `ResourceProvider` | yes | Origin provider. |
+| `source` | `str` | yes | Origin provider name (any string). |
 | `url` | `str` | yes | Canonical link. |
 | `authors` | `list[str]` | no | |
 | `year` | `int` | no | |
@@ -315,7 +343,8 @@ with `extra="allow"`).
 | `description` | `str` | no | |
 | `tags` | `list[str]` | no | |
 | `meta` | `dict[str, Any]` | no | Provider-specific extras. |
-| `score` | `float` | no | Relevance score. |
+| `score` | `float` | no | Provider-scale ranking score. |
+| `relevance` | `float` | no | Normalized 0..1 relevance (newer servers). |
 
 ### `SearchResponse`
 
@@ -328,6 +357,7 @@ with `extra="allow"`).
 | `hasMore` | `bool \| None` | `None` | |
 | `nextCursor` | `str \| None` | `None` | Pagination cursor. |
 | `coverage` | `SearchCoverage \| None` | `None` | |
+| `ranking` | any | `None` | Ranking metadata, passed through. |
 
 ### `SearchCoverage`
 
@@ -338,6 +368,13 @@ with `extra="allow"`).
 | `uniqueBefore` | `int` | `0` | Distinct results before merge. |
 | `uniqueAfter` | `int` | `0` | Distinct results after merge. |
 | `merged` | `int` | `0` | Number merged out as duplicates. |
+
+### `SourcesResponse`
+
+| Field | Type | Notes |
+|---|---|---|
+| `sources` | `list[Source]` | `name`, `label`, `pillar`, `types`, `tier`, `unlocked`, `configured`. |
+| `packs` | `list[SourcePack]` | `id`, `label`, `description`, `sources` (provider names). |
 
 Because every model sets `extra="allow"`, fields Open Idea adds in the future
 are preserved on parse and round-tripped on output.
@@ -351,7 +388,7 @@ are preserved on parse and round-tripped on output.
 | `ValueError("URI must start with 'openidea://' …")` | resource read | Bad scheme. |
 | `ValueError("No resource found for …")` | resource read | Upstream 404. |
 | `OpenIdeaAuthError` | any request | Upstream 401. |
-| `httpx.HTTPStatusError` | any request | Upstream non-2xx (other than handled 401/404/429). |
+| `httpx.HTTPStatusError` | any request | Upstream non-2xx after the retry (other than handled 401/404). |
 
 ## Troubleshooting
 

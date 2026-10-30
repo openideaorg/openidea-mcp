@@ -90,27 +90,32 @@ In the Inspector UI:
 
 1. Open the **Tools** tab and click **List Tools**. You should see all seven:
    `search_papers`, `search_code`, `search_datasets`, `search_models`,
-   `search_hardware`, `search_videos`, `search_all`.
+   `search_hardware`, `search_videos`, `search_all`, `list_sources`.
 2. Select `search_papers` and enter arguments:
 
    ```json
-   { "query": "transformer architectures", "limit": 5 }
+   { "query": "transformer architectures", "max_results": 5 }
    ```
 
 3. Click **Run Tool**. The result is one text content block containing JSON:
 
    ```json
-   { "results": [ { "id": "openalex:W…", "type": "paper", "title": "…", "source": "openalex", "url": "https://…" } ], "total": 1 }
+   { "query": "transformer architectures", "total_returned": 5, "stopped_because": "max_results",
+     "results": [ { "id": "openalex:W…", "type": "paper", "title": "…", "url": "https://…", "source": "openalex", "relevance": 0.97 } ],
+     "next_cursor": "…" }
    ```
 
 4. Test `search_all` with a `types` filter:
 
    ```json
-   { "query": "protein folding", "limit": 10, "types": ["paper", "dataset"] }
+   { "query": "protein folding", "max_results": 10, "types": ["paper", "dataset"] }
    ```
 
-   The merged-and-deduplicated response has the shape
-   `{ "results": [...], "total": N }` (no `coverage` in the filtered branch).
+   Both types run in parallel; the response is merged, de-duplicated and sorted
+   by relevance, with per-type status under `by_type`.
+
+5. Run `list_sources` (no arguments). Servers without `/api/v1/sources` return
+   `{"supported": false, "message": "…"}`.
 
 ## Testing Resources
 

@@ -2,8 +2,8 @@
 
 An MCP server that exposes [Open Idea](https://www.openidea.world)'s federated
 search — across open-knowledge providers (OpenAlex, arXiv, Zenodo, Software
-Heritage, GitHub, GitLab, HuggingFace, PapersWithCode, YouTube, CKAN, Figshare,
-Kaggle) — to MCP-compatible clients (Claude Desktop, Claude Code, the MCP
+Heritage, GitHub, GitLab, HuggingFace, YouTube, CKAN, Figshare, Kaggle, and
+more as Open Idea adds them) — to MCP-compatible clients (Claude Desktop, Claude Code, the MCP
 Inspector, Cursor, etc.).
 
 This package is a **thin client** over the Open Idea v1 HTTP API. All the
@@ -135,14 +135,15 @@ pip install -e .
 
 ## Configure
 
-The server reads two environment variables:
+The server reads these environment variables:
 
 | Variable | Required | Description |
 |---|---|---|
 | `OPENIDEA_API_URL` | yes | Base URL of the Open Idea API (`https://www.openidea.world` in production). A trailing slash is stripped automatically. |
 | `OPENIDEA_API_KEY` | yes | Personal Bearer key. Mint one at `https://openidea.world/developer/api-keys` while signed in. The plaintext is shown only once at creation. |
+| `OPENIDEA_TIMEOUT` | no | Request timeout in seconds (default 30). |
 
-Both values are whitespace/newline-trimmed before use.
+The URL and key are whitespace/newline-trimmed before use.
 
 ## Run
 
@@ -199,18 +200,33 @@ npx @modelcontextprotocol/inspector http://localhost:8000/sse
 
 | Name | Description |
 |---|---|
-| `search_papers` | Search for papers (OpenAlex, arXiv, PapersWithCode). |
+| `search_papers` | Search for papers (OpenAlex, arXiv). |
 | `search_code` | Search for code repos (GitHub, GitLab, Software Heritage). |
 | `search_datasets` | Search for datasets (Zenodo, CKAN, Figshare, Kaggle). |
 | `search_models` | Search for ML models (HuggingFace). |
 | `search_hardware` | Search for open hardware. |
 | `search_videos` | Search for educational videos (YouTube). |
-| `search_all` | Search across all providers. Accepts an optional `types: string[]` filter. |
+| `search_all` | Search across all providers. Optional `types: string[]`; several types run in parallel and merge by relevance. |
+| `list_sources` | List the providers and source packs the server offers (newer servers). |
 
-Each tool takes `query: string` and optional `limit: integer` (default 20,
-range 1–100). Returns a JSON payload `{ results: Resource[], total: number, … }`.
-Full schemas and response shapes are in
-[docs/api-reference.md](docs/api-reference.md).
+Search tools take `query` plus:
+
+| Input | Default | Meaning |
+|---|---|---|
+| `max_results` | 50 | Up to 500. |
+| `min_relevance` | 0.35 | Drop results below this 0..1 relevance; `0` keeps everything. |
+| `mode` | `auto` | `auto` pages until `max_results` or results stop being relevant; `page` fetches one page (`page` / `cursor`). |
+| `sources` | all | Restrict to providers, e.g. `["arxiv", "openalex"]`. |
+| `detail` | `compact` | `full` returns complete records. |
+
+The response is `{ query, total_returned, stopped_because, results, next_cursor }`,
+each result carrying `id`, `type`, `title`, `url`, `year`, `source`,
+`relevance`, a short `description` and the first three `authors`.
+
+Works with older Open Idea servers too: without a server `relevance`, it is
+derived from `score`; `sources` and `min_relevance` are applied on this side;
+`list_sources` says when the server does not support it. Full schemas and
+response shapes are in [docs/api-reference.md](docs/api-reference.md).
 
 ### Resources
 
@@ -241,7 +257,7 @@ See [docs/development.md](docs/development.md) for the full contributor guide.
 | Symptom | Likely cause |
 |---|---|
 | `401 unauthorized` errors | Key is missing, malformed, has a stray newline, or has been revoked. Mint a new one. |
-| `429 rate_limited` | Throughput limit on this key (server retries once). Wait or use a second key. |
+| `429 rate_limited` | Throughput limit on this key (retried once). Lower `max_results`, wait, or use a second key. |
 | Empty results | Upstream provider down, or `type` filter excludes all results. Try `search_all`. |
 | `connection refused` | `OPENIDEA_API_URL` doesn't point to a running Open Idea instance. |
 

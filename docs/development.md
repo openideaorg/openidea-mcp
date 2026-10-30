@@ -108,7 +108,15 @@ pytest tests/test_client.py::test_401_raises_auth_error   # single test
 - `test_get_resource_returns_resource` — happy-path resource fetch.
 - `test_get_resource_404_returns_none` — 404 maps to `None`.
 - `test_401_raises_auth_error` — 401 raises `OpenIdeaAuthError`.
-- `test_429_retries_once` — 429 then 200 results in exactly two calls.
+- `test_429_retries_once` — 429 then 200 results in exactly two calls; further
+  tests cover the Retry-After cap, 5xx and connect-error retries, the timeout
+  default and `OPENIDEA_TIMEOUT`, `minRelevance`/`sources` params,
+  `list_sources` (including 404) and unknown provider names.
+
+`tests/test_paging.py` (transport mocked with `respx`): auto paging stops on
+`max_results`, no further page and a below-threshold page; fallback relevance
+from `score`; page mode; page stepping on servers without cursors; the
+`sources` filter; multi-type merge order and dedupe; compact and full output.
 
 `tests/test_server.py`:
 
@@ -116,10 +124,12 @@ pytest tests/test_client.py::test_401_raises_auth_error   # single test
   covers every `ResourceType`.
 - `test_uri_prefix_is_openidea_scheme` — `URI_PREFIX == "openidea://"`.
 - `test_build_server_returns_named_server` — server name is `openidea-search`.
+- Tool list and `call_tool` are exercised through the registered request
+  handlers: the new inputs are advertised, `list_sources` on an old server
+  explains itself, and a search returns the compact payload.
 
-> End-to-end MCP transport behavior is intentionally **not** unit-tested (it
-> would require a full client+server stdio pair). Validate it manually with the
-> [MCP Inspector](mcp-inspector.md).
+> MCP transport behavior (stdio / SSE) is not unit-tested. Validate it
+> manually with the [MCP Inspector](mcp-inspector.md).
 
 ## Local Development Workflow
 
@@ -150,14 +160,16 @@ The async HTTP client. Key points:
 - `OpenIdeaClient.__init__` resolves `OPENIDEA_API_URL` / `OPENIDEA_API_KEY`
   (constructor arg → env var), `.strip()`s both, and raises `RuntimeError` if
   either is empty. It builds an `httpx.AsyncClient` with a default `timeout`
-  (10.0s) and the `Authorization: Bearer …`, `User-Agent`, and `Accept` headers.
+  (30s, or `OPENIDEA_TIMEOUT`) and the `Authorization: Bearer …`, `User-Agent`,
+  and `Accept` headers.
 - `_request` is the single choke point for HTTP: it retries once on `429`
-  (honoring `Retry-After`, capped at 5s) and converts `401` into
-  `OpenIdeaAuthError`.
-- `search(query, type=, limit=, page=, cursor=)` → `GET /api/v1/search`, parsed
-  into `SearchResponse`. (`page`/`cursor` support pagination but are not yet
-  surfaced by the tools.)
+  (honoring `Retry-After`, capped at 5s), `5xx` or a connection error, and
+  converts `401` into `OpenIdeaAuthError`.
+- `search(query, type=, limit=, page=, cursor=, min_relevance=, sources=)` →
+  `GET /api/v1/search`, parsed into `SearchResponse`.
 - `get_resource(id)` → `GET /api/v1/resources/{id}`; returns `None` on `404`.
+- `list_sources()` → `GET /api/v1/sources`; returns `None` on `404` (older
+  servers).
 - Implements the async context-manager protocol (`__aenter__` / `__aexit__`)
   and `aclose()` for clean shutdown.
 
@@ -175,21 +187,31 @@ Builds the MCP server. Key points:
   asserts this dict covers every `ResourceType`, so **adding a new resource type
   requires adding its preset here** (or updating that test deliberately).
 - `_BASE_SCHEMA` / `_ALL_SCHEMA` are the JSON Schemas advertised for tool input.
-- `_call_tool` validates `query`, dispatches presets to `client.search(type=…)`,
-  and implements the `search_all` fan-out/merge/dedupe-by-id logic.
+- `_call_tool` validates `query` and hands search tools to `run_search`, which
+  clamps the inputs and calls `paging.collect` (one type) or
+  `paging.collect_many` (several types); it also serves `list_sources`.
+- Tool descriptions (`_USAGE`) tell the model about `max_results`, auto paging
+  and `sources`; keep them in step with behavior.
 - `_read_resource` enforces the `openidea://` prefix (`URI_PREFIX`) and maps a
   missing resource to a `ValueError`.
 
 To add a new tool: register it in `_list_tools` with an input schema, and handle
 its name in `_call_tool`.
 
+### `src/mcp_openidea_search/paging.py`
+
+Auto paging, relevance (server `relevance` or `score / first-page top`),
+`min_relevance` and `sources` filtering, concurrent multi-type merge, and
+compact/full rendering. See [architecture.md](architecture.md#tool-execution-flow).
+
 ### `src/mcp_openidea_search/models.py`
 
 The Pydantic v2 data contract, written from the public API docs (deliberately
 not imported from any Open Idea repo, to keep this package standalone):
 
-- `ResourceType` and `ResourceProvider` enums.
-- `Resource`, `SearchResponse`, `SearchCoverage` models, all with
+- `ResourceType` enum, and `ResourceProvider` (documentation only:
+  `Resource.source` is a free string so new providers validate).
+- `Resource`, `SearchResponse`, `SearchCoverage`, `SourcesResponse` models, all with
   `extra="allow"` so unknown fields from the API survive a round-trip.
 
 When the API contract changes, update these models. `extra="allow"` means new

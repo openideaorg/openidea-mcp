@@ -97,6 +97,7 @@ if either is missing.
 |---|---|---|
 | `OPENIDEA_API_URL` | yes | Base URL of the Open Idea API. Production value: `https://www.openidea.world`. A trailing slash is stripped automatically. |
 | `OPENIDEA_API_KEY` | yes | Personal Bearer key. Mint one at `https://openidea.world/developer/api-keys` while signed in. The plaintext is shown only once at creation. |
+| `OPENIDEA_TIMEOUT` | no | Request timeout in seconds (default 30). |
 
 Both values are read in [client.py](../src/mcp_openidea_search/client.py) and are
 `.strip()`-ed, so surrounding whitespace and trailing newlines (a common
@@ -150,7 +151,7 @@ npx @modelcontextprotocol/inspector mcp-openidea-search stdio
 ```
 
 Then, in the Inspector UI, call the `search_papers` tool with
-`{"query": "transformer architectures", "limit": 5}`.
+`{"query": "transformer architectures", "max_results": 5}`.
 
 ## Expected Outputs
 

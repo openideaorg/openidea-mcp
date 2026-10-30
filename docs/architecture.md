@@ -31,7 +31,7 @@ This package. Defined in [server.py](../src/mcp_openidea_search/server.py) via
 
 | Handler | Decorator | Responsibility |
 |---|---|---|
-| `_list_tools` | `@server.list_tools()` | Advertises the 7 search tools and their input schemas. |
+| `_list_tools` | `@server.list_tools()` | Advertises the 7 search tools and `list_sources`, with their input schemas. |
 | `_call_tool` | `@server.call_tool()` | Executes a tool, returning a `TextContent` JSON payload. |
 | `_list_resources` | `@server.list_resources()` | Returns `[]` — resources are addressable but not enumerable. |
 | `_read_resource` | `@server.read_resource()` | Resolves an `openidea://` URI to a single resource record. |
@@ -43,20 +43,37 @@ The transport is selected by the CLI in [cli.py](../src/mcp_openidea_search/cli.
   `SseServerTransport`, served by `uvicorn`. Routes: `GET /sse` (event stream)
   and `POST /messages/` (client → server messages).
 
+### Paging
+
+[paging.py](../src/mcp_openidea_search/paging.py) holds the search logic the
+tools share, separate from the MCP plumbing so it can be tested directly:
+
+- `collect(...)` — one type (or no type): auto mode pages through
+  `GET /api/v1/search`, page mode makes one request. It computes each result's
+  relevance, drops results below `min_relevance` or outside `sources`, and
+  reports why it stopped.
+- `collect_many(...)` — runs `collect` per type with `asyncio.gather`, merges,
+  de-duplicates by id and sorts by relevance.
+- `render(...)` — compact or full output for one result.
+
 ### OpenIdea Client
 
 [client.py](../src/mcp_openidea_search/client.py) — `OpenIdeaClient`, a thin
 async wrapper over `httpx.AsyncClient`. It owns:
 
 - Base URL + Bearer auth header construction.
-- Default `timeout=10.0` seconds.
-- A single retry on HTTP `429` (honoring `Retry-After`, capped at 5s).
+- Default timeout of 30 seconds (`OPENIDEA_TIMEOUT` overrides).
+- At most one retry per request: on HTTP `429` (honoring `Retry-After`, capped
+  at 5s), on `5xx`, and on connection errors (0.5s pause). Read timeouts are
+  not retried.
 - Conversion of HTTP `401` into `OpenIdeaAuthError`.
 - Parsing JSON into the Pydantic models in
   [models.py](../src/mcp_openidea_search/models.py).
 
-It exposes exactly two API methods: `search(...)` → `GET /api/v1/search`, and
-`get_resource(id)` → `GET /api/v1/resources/{id}`.
+It exposes three API methods: `search(...)` → `GET /api/v1/search` (with
+optional `minRelevance` and `sources`), `get_resource(id)` →
+`GET /api/v1/resources/{id}`, and `list_sources()` → `GET /api/v1/sources`
+(`None` on 404, for servers that predate it).
 
 ### OpenIdea REST API
 
@@ -67,11 +84,12 @@ each returned.
 
 ### Upstream Providers
 
-Open Idea aggregates from the providers enumerated in `ResourceProvider`
-([models.py](../src/mcp_openidea_search/models.py)): `openalex`, `arxiv`,
-`zenodo`, `swh` (Software Heritage), `ckan`, `huggingface`, `paperswithcode`,
-`youtube`, `github`, `gitlab`, `figshare`, `kaggle`, and `custom`. This server
-never talks to those providers directly — only to Open Idea.
+Open Idea aggregates from providers such as `openalex`, `arxiv`, `zenodo`,
+`swh` (Software Heritage), `ckan`, `huggingface`, `youtube`, `github`,
+`gitlab`, `figshare` and `kaggle`, and adds more over time. `Resource.source`
+is therefore a plain string, and `list_sources` reads the live list from
+`GET /api/v1/sources` where the server has it. This server never talks to those
+providers directly — only to Open Idea.
 
 ## Architecture Diagram
 
@@ -84,28 +102,32 @@ flowchart TD
     subgraph Server["mcp-openidea-search (this package)"]
         CLI["cli.py<br/>stdio | http transport"]
         SRV["server.py<br/>Server('openidea-search')"]
-        TOOLS["Tools<br/>search_papers … search_all"]
+        TOOLS["Tools<br/>search_papers … search_all, list_sources"]
+        PAGING["paging.py<br/>auto paging, relevance, merge"]
         RES["Resources<br/>openidea:// reader"]
         CLIENT["client.py<br/>OpenIdeaClient (httpx)"]
         CLI --> SRV
         SRV --> TOOLS
         SRV --> RES
-        TOOLS --> CLIENT
+        TOOLS --> PAGING
+        PAGING --> CLIENT
         RES --> CLIENT
     end
 
     subgraph API["OpenIdea REST API"]
         SEARCH["GET /api/v1/search"]
         RESOURCE["GET /api/v1/resources/:id"]
+        SOURCES["GET /api/v1/sources"]
     end
 
     subgraph Providers["Upstream Providers"]
-        P["OpenAlex · arXiv · Zenodo · Software Heritage<br/>GitHub · GitLab · HuggingFace · PapersWithCode<br/>YouTube · CKAN · Figshare · Kaggle"]
+        P["OpenAlex · arXiv · Zenodo · Software Heritage<br/>GitHub · GitLab · HuggingFace<br/>YouTube · CKAN · Figshare · Kaggle"]
     end
 
     CD -- "MCP (stdio / SSE)" --> CLI
     CLIENT -- "HTTPS + Bearer token" --> SEARCH
     CLIENT -- "HTTPS + Bearer token" --> RESOURCE
+    CLIENT -- "HTTPS + Bearer token" --> SOURCES
     SEARCH --> P
     RESOURCE --> P
 ```
@@ -127,38 +149,53 @@ OpenAlex / GitHub / HuggingFace / YouTube / Zenodo / …
 For a preset tool (`search_papers`, `search_code`, `search_datasets`,
 `search_models`, `search_hardware`, `search_videos`):
 
-1. Client calls `call_tool(name, {query, limit})`.
-2. `_call_tool` validates that `query` is present (raises `ValueError` if not)
-   and reads `limit` (default 20).
-3. The tool name is mapped to a `ResourceType` via `SEARCH_PRESETS`.
-4. `client.search(query, type=<rtype>, limit=limit)` issues
-   `GET /api/v1/search?q=…&limit=…&type=…`.
-5. The JSON response is validated into `SearchResponse`, dumped to JSON
-   (`exclude_none=True`), and returned as a single `TextContent` block.
+1. Client calls `call_tool(name, {query, max_results, min_relevance, mode, …})`.
+2. `_call_tool` checks `query`, maps the tool name to a `ResourceType` via
+   `SEARCH_PRESETS`, and hands off to `run_search`, which clamps the inputs
+   (`max_results` 1–500, `min_relevance` 0–1).
+3. `paging.collect` runs the search:
+   - **auto**: request `limit = min(remaining, 100)`; score each result
+     (server `relevance`, else `score / top score of the first page`); keep
+     those at or above `min_relevance` and in `sources`; follow `nextCursor`
+     (or `page + 1` when only `hasMore` is sent). Stop on `max_results`, no more
+     pages, a page entirely below `min_relevance`, or 25 pages.
+   - **page**: one request at `page` / `cursor`.
+4. Results are rendered compact (default) or full and returned as one
+   `TextContent` JSON block with `query`, `total_returned`, `stopped_because`,
+   `results` and `next_cursor`.
 
 For `search_all`:
 
-- **No `types` filter** → one `GET /api/v1/search?q=…&limit=…` call; the full
-  `SearchResponse` is returned.
-- **With a `types` filter** → the server fans out **one request per requested
-  type**, merges the results, **de-duplicates by `Resource.id`**, and returns
-  `{"results": [...], "total": <merged count>}`. Unknown type strings are
-  silently skipped.
+- **No `types`, or one** → same as a preset.
+- **Several `types`** → `paging.collect_many` runs one collection per type
+  concurrently (`asyncio.gather`), merges, de-duplicates by `Resource.id`
+  (higher relevance wins), sorts by relevance, trims to `max_results`, and adds
+  per-type status under `by_type`. One failing type does not fail the call
+  unless all fail or the key is rejected.
+
+For `list_sources`: `client.list_sources()`; a 404 becomes
+`{"supported": false, "message": …}` so the model can explain that the server
+does not offer it yet.
 
 ```mermaid
 sequenceDiagram
     participant C as MCP Client
     participant S as Server (_call_tool)
+    participant P as paging.collect
     participant K as OpenIdeaClient
     participant A as OpenIdea API
 
-    C->>S: call_tool("search_papers", {query, limit})
-    S->>S: validate query, read limit
-    S->>K: search(query, type=paper, limit)
-    K->>A: GET /api/v1/search?q&type=paper&limit
-    A-->>K: 200 JSON (results, total, coverage…)
-    K-->>S: SearchResponse
-    S-->>C: TextContent(JSON payload)
+    C->>S: call_tool("search_papers", {query, max_results, min_relevance})
+    S->>P: collect(query, type=paper, …)
+    loop until max_results / no cursor / page below threshold
+        P->>K: search(query, type, limit, cursor, minRelevance, sources)
+        K->>A: GET /api/v1/search?…
+        A-->>K: 200 JSON (items, nextCursor, …)
+        K-->>P: SearchResponse
+        P->>P: score, filter, dedupe
+    end
+    P-->>S: Collected
+    S-->>C: TextContent(compact JSON)
 ```
 
 ## Resource Fetching Flow
@@ -230,11 +267,27 @@ revoked at the Open Idea developer console.
 | Condition | Handled in | Behavior |
 |---|---|---|
 | HTTP 429 | `client._request` | Sleep `min(Retry-After, 5.0)`s, retry **once**. |
+| HTTP 5xx | `client._request` | Sleep 0.5s, retry **once**. |
+| Connect error / connect timeout | `client._request` | Sleep 0.5s, retry **once**. |
+| Read timeout | — | Not retried (default timeout 30s, `OPENIDEA_TIMEOUT`). |
 | HTTP 401 | `client._request` | Raise `OpenIdeaAuthError`. |
 | HTTP 404 (resource) | `client.get_resource` | Return `None`. |
-| Other 4xx/5xx | `client.search` / `get_resource` | `raise_for_status()` → `httpx.HTTPStatusError`. |
+| HTTP 404 (sources) | `client.list_sources` | Return `None`; the tool explains the server lacks it. |
+| Other 4xx/5xx after retry | `client.search` / `get_resource` / `list_sources` | `raise_for_status()` → `httpx.HTTPStatusError`. |
+| One type fails in multi-type `search_all` | `paging.collect_many` | Reported under `by_type`; the others return. |
 | Missing `query` | `server._call_tool` | `ValueError("`query` is required.")` |
 | Bad resource URI | `server._read_resource` | `ValueError`. |
+
+## Compatibility with older servers
+
+| Newer server feature | Older server behavior | What this package does |
+|---|---|---|
+| Per-result `relevance` | Only `score` | Relevance = `score / first-page top score`. |
+| `minRelevance` param | Ignored | Filters on this side too. |
+| `sources` param | Ignored | Drops non-matching `source` on this side too. |
+| `nextCursor` | May be absent | Steps `page` while `hasMore` is true. |
+| `GET /api/v1/sources` | 404 | `list_sources` reports `supported: false`. |
+| New provider names | — | `source` is a free string, so they validate. |
 
 ## Data Models
 

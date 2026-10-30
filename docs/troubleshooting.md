@@ -219,12 +219,15 @@ indicates an upstream/server-side failure at Open Idea.
 
 **Behavior:** `_request` retries **once** on a `429`, sleeping
 `min(Retry-After, 5.0)` seconds first. If the second attempt also fails, the
-status propagates.
+status propagates. (`5xx` responses and connection errors also get one retry
+after 0.5s.)
 
 **Fixes:**
 
-- Reduce request volume — note `search_all` with a `types` filter issues **one
-  request per type**, multiplying your call count.
+- Reduce request volume — auto mode issues one request per page (up to
+  `max_results / page size`), and `search_all` with several `types` runs one
+  collection **per type**. Lower `max_results`, raise `min_relevance`, or use
+  `mode: "page"` to control the call count.
 - Stagger calls, or use a second API key for high-throughput workloads.
 
 ## Empty results (not an error)
