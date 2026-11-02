@@ -37,7 +37,8 @@ OpenIdeaMcp-/
 │   ├── claude-code.md
 │   ├── mcp-inspector.md
 │   ├── troubleshooting.md
-│   └── development.md
+│   ├── development.md
+│   └── research.md                   # lab workflows (sweeps, citations)
 ├── src/
 │   └── mcp_openidea_search/
 │       ├── __init__.py                 # Package version (0.1.0)
@@ -174,11 +175,19 @@ Builds the MCP server. Key points:
 - `SEARCH_PRESETS` maps each preset tool name to a `ResourceType`. A test
   asserts this dict covers every `ResourceType`, so **adding a new resource type
   requires adding its preset here** (or updating that test deliberately).
-- `_BASE_SCHEMA` / `_ALL_SCHEMA` are the JSON Schemas advertised for tool input.
-- `_call_tool` validates `query`, dispatches presets to `client.search(type=…)`,
-  and implements the `search_all` fan-out/merge/dedupe-by-id logic.
+- `_BASE_SCHEMA` / `_ALL_SCHEMA` are the JSON Schemas advertised for tool input
+  (`query`, `limit`, `page`, plus `types` on `search_all`).
+- `_call_tool` validates `query`, clamps `limit` (`clamp_limit`), parses `page`
+  (`parse_page`), dispatches presets to `client.search(type=…)`, and implements
+  the `search_all` concurrent fan-out (`asyncio.gather`) + merge/dedupe.
+- Pure, unit-tested helpers live at module level: `clamp_limit`, `parse_page`,
+  `strip_resource_ref` (bare id or `openidea://` URI), `format_citation`
+  (markdown/apa/bibtex), `merge_resources` (order-preserving dedupe + merged
+  coverage). Keep new tool logic in this style so `tests/test_server.py` can
+  cover it without MCP transport.
 - `_read_resource` enforces the `openidea://` prefix (`URI_PREFIX`) and maps a
-  missing resource to a `ValueError`.
+  missing resource to a `ValueError`. The `get_resource` tool is the same fetch
+  via tool-call instead of resource-read.
 
 To add a new tool: register it in `_list_tools` with an input schema, and handle
 its name in `_call_tool`.

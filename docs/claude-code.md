@@ -151,8 +151,13 @@ You can also confirm tool discovery with the `/mcp` command inside a session.
 ## Expected Outputs
 
 - `claude mcp list` shows `openidea` as **connected**.
-- The 7 tools (`search_papers` … `search_all`) are available to the model.
+- The 12 tools (`search_papers` … `search_all`, plus `get_resource`,
+  `format_citation`, `resolve_paper`, `graph_neighbours`, `lab_handoff`) are
+  available to the model.
 - Tool calls return JSON payloads (`{ "results": [...], "total": N }`).
+
+> Lab work here targets **Muse** — prefer model `muse-spark-1.3-contributor`.
+> `lab_handoff` bundles already carry this as `suggestedModel`.
 
 ## Common Errors
 

@@ -14,6 +14,7 @@ side. This repo is fully standalone — no dependency on the Open Idea codebase.
 
 | Doc | Contents |
 |---|---|
+| [docs/research.md](docs/research.md) | Lab workflows: literature sweeps, record inspection, citations. |
 | [docs/setup.md](docs/setup.md) | Install, configure, and run the server. |
 | [docs/architecture.md](docs/architecture.md) | Components, flows, and a Mermaid diagram. |
 | [docs/api-reference.md](docs/api-reference.md) | Every tool, resource, and data model. |
@@ -206,11 +207,20 @@ npx @modelcontextprotocol/inspector http://localhost:8000/sse
 | `search_hardware` | Search for open hardware. |
 | `search_videos` | Search for educational videos (YouTube). |
 | `search_all` | Search across all providers. Accepts an optional `types: string[]` filter. |
+| `get_resource` | Fetch one canonical record by id or `openidea://` URI. |
+| `format_citation` | Fetch a record and format it as a citation (`markdown`, `apa`, `bibtex`). |
+| `resolve_paper` | Resolve a DOI, arXiv id, OpenAlex id, title, or URI to the canonical paper record. |
+| `graph_neighbours` | 1-hop graph neighbourhood for a seed paper (meta links, else title/author expansion). |
+| `lab_handoff` | Assemble a Lab project handoff bundle (resolved papers + citations + Muse model hint). |
 
-Each tool takes `query: string` and optional `limit: integer` (default 20,
-range 1–100). Returns a JSON payload `{ results: Resource[], total: number, … }`.
-Full schemas and response shapes are in
-[docs/api-reference.md](docs/api-reference.md).
+> **Muse-first:** this server is built and verified for **Muse** (Claude Code).
+> Lab handoffs carry `"suggestedModel": "muse-spark-1.3-contributor"`.
+
+Each search tool takes `query: string` plus optional `limit: integer`
+(default 20, clamped to 1–100) and `page: integer` (for deep literature
+sweeps). Full schemas, the filtered-`search_all` merge behavior, and lab
+workflows are in [docs/api-reference.md](docs/api-reference.md) and
+[docs/research.md](docs/research.md).
 
 ### Resources
 
