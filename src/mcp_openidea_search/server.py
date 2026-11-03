@@ -205,7 +205,7 @@ def format_citation(resource: Resource, style: str = "markdown") -> str:
         if resource.year is not None:
             fields.append(f"  year={{{resource.year}}}")
         fields.append(f"  url={{{resource.url}}}")
-        fields.append(f"  note={{{resource.id}; via Open Idea ({resource.source.value})}}}")
+        fields.append(f"  note={{{resource.id}; via Open Idea ({resource.source.value})}}")
         return f"@misc{{{key},\n" + ",\n".join(fields) + "\n}"
     # markdown (default): lab-note friendly one-liner
     return f"**{resource.title}** — {authors} ({year}). [{resource.source.value}]({resource.url})"
@@ -258,9 +258,9 @@ def candidate_ids_for_ref(ref: str) -> list[str]:
     base = normalize_paper_ref(ref)
     cands: list[str] = [base]
     low = base.lower()
-    if low.startswith("10.") or "/" in base:
-        # Likely a DOI — try the doi:-namespaced id as well.
-        namespaced = base if low.startswith("doi:") else f"doi:{base}"
+    if low.startswith("10.") and "/" in base:
+        # DOI shape (10.xxxx/...) — try the doi:-namespaced id as well.
+        namespaced = f"doi:{base}"
         if namespaced not in cands:
             cands.append(namespaced)
     if low.startswith("w") and base[1:2].isdigit():
@@ -268,7 +268,7 @@ def candidate_ids_for_ref(ref: str) -> list[str]:
         namespaced = f"openalex:{base}"
         if namespaced not in cands:
             cands.append(namespaced)
-    if _re.fullmatch(r"\d{4}\.\d{4,5}(v\d+)?", base):
+    if re.fullmatch(r"\d{4}\.\d{4,5}(v\d+)?", base):
         namespaced = f"arxiv:{base}"
         if namespaced not in cands:
             cands.append(namespaced)
@@ -367,7 +367,11 @@ async def resolve_paper_ref(client: OpenIdeaClient, ref: str, limit: int = 5) ->
     Strategy: try direct id fetches in candidate order, else fall back to a
     paper-type search and return the top hit plus candidates.
     """
-    limit = max(1, min(20, int(limit)))
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        raise ValueError(f"`limit` must be an integer 1..20; got {limit!r}")
+    limit = max(1, min(20, limit))
     raw = (ref or "").strip()
     if not raw:
         raise ValueError("`ref` is required (DOI, arXiv id, OpenAlex id, title, or openidea:// URI).")
@@ -402,15 +406,22 @@ async def neighbourhood_for(
     Prefers explicit links in seed.meta; falls back to title/author search so
     the tool is useful even when the backend ships no graph endpoint yet.
     """
-    limit = max(1, min(50, int(limit)))
-    depth = int(depth)
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        raise ValueError(f"`limit` must be an integer 1..50; got {limit!r}")
+    limit = max(1, min(50, limit))
+    try:
+        depth = int(depth)
+    except (TypeError, ValueError):
+        raise ValueError(f"`depth` must be 1 or 2; got {depth!r}")
     if depth < 1 or depth > 2:
         raise ValueError(f"`depth` must be 1 or 2; got {depth!r}")
     seed_id = strip_resource_ref(ref)
     seed = await client.get_resource(seed_id)
     if seed is None:
         raise ValueError(f"No resource found for {seed_id!r}")
-    linked = meta_link_ids(seed)[: max(limit * 2, limit)]
+    linked = meta_link_ids(seed)[: limit * 2]
     neighbours: list[Resource] = []
     strategy = "search"
     if linked:
@@ -457,6 +468,13 @@ async def lab_handoff_bundle(
         raise ValueError("`refs` must list at least one paper id or openidea:// URI.")
     if style not in CITATION_STYLES:
         raise ValueError(f"Unknown citation style {style!r}; expected one of {CITATION_STYLES}.")
+    if notes is None:
+        notes = ""
+    elif not isinstance(notes, str):
+        notes = str(notes)
+    for r in refs:
+        if not isinstance(r, str) or not r.strip():
+            raise ValueError("`refs` must list at least one paper id or openidea:// URI.")
     cleaned = [strip_resource_ref(r) for r in refs]
     # De-dupe preserving order.
     seen: set[str] = set()
@@ -476,7 +494,7 @@ async def lab_handoff_bundle(
         cite = format_citation(r, style)
         entries.append((r, cite))
         resolved_json.append(r.model_dump(mode="json", exclude_none=True))
-    markdown = build_handoff_markdown(topic, entries, notes or "", missing)
+    markdown = build_handoff_markdown(topic, entries, notes, missing)
     return {
         "topic": topic,
         "suggestedModel": SUGGESTED_MODEL,
